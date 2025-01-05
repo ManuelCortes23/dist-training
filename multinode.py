@@ -3,8 +3,7 @@ import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
 from utils import MyTrainDataset
 
-# With torchrun, we don't need to use multiprocessing
-# import torch.multiprocessing as mp
+import torch.multiprocessing as mp
 from torch.utils.data.distributed import DistributedSampler
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.distributed import init_process_group, destroy_process_group
@@ -25,8 +24,10 @@ class Trainer:
         save_every: int,
         snapshot_path: str,
     ) -> None:
-        self.gpu_id = int(os.environ["LOCAL_RANK"])
-        self.model = model.to(self.gpu_id)
+        self.local_rank = int(os.environ["LOCAL_RANK"])
+        # global rank stores uniqe id across all nodes
+        self.global_rank = int(os.environ["RANK"])
+        self.model = model.to(self.local_rank)
         self.train_data = train_data
         self.optimizer = optimizer
         self.save_every = save_every
@@ -36,10 +37,10 @@ class Trainer:
             print("Loading snapshot")
             self._load_snapshot(snapshot_path)
 
-        self.model = DDP(self.model, device_ids=[self.gpu_id])
+        self.model = DDP(self.model, device_ids=[self.local_rank])
 
     def _load_snapshot(self, snapshot_path):
-        loc = f"cuda:{self.gpu_id}"
+        loc = f"cuda:{self.local_rank}"
         snapshot = torch.load(snapshot_path, map_location=loc)
         self.model.load_state_dict(snapshot["MODEL_STATE"])
         self.epochs_run = snapshot["EPOCHS_RUN"]
@@ -55,14 +56,14 @@ class Trainer:
     def _run_epoch(self, epoch):
         b_sz = len(next(iter(self.train_data))[0])
         print(
-            f"[GPU{self.gpu_id}] Epoch {epoch} | Batchsize: {b_sz} | Steps: {len(self.train_data)}"
+            f"[GPU{self.global_rank}] Epoch {epoch} | Batchsize: {b_sz} | Steps: {len(self.train_data)}"
         )
         # Ensure the sampler is a DistributedSampler
         if isinstance(self.train_data.sampler, DistributedSampler):
             self.train_data.sampler.set_epoch(epoch)
         for source, targets in self.train_data:
-            source = source.to(self.gpu_id)
-            targets = targets.to(self.gpu_id)
+            source = source.to(self.local_rank)
+            targets = targets.to(self.local_rank)
             self._run_batch(source, targets)
 
     def _save_snapshot(self, epoch):
@@ -76,7 +77,7 @@ class Trainer:
     def train(self, max_epochs: int):
         for epoch in range(self.epochs_run, max_epochs):
             self._run_epoch(epoch)
-            if self.gpu_id == 0 and epoch % self.save_every == 0:
+            if self.local_rank == 0 and epoch % self.save_every == 0:
                 self._save_snapshot(epoch)
 
 
@@ -113,10 +114,31 @@ def main(
 
 if __name__ == "__main__":
     """
-    To run the script, use one of the following commands:
-    torchrun --standalone --nproc_per_node=4 multigpu_torchrun.py --total_epochs 10 --save_every 1 --batch_size 32
-    torchrun --standalone --nproc_per_node=gpu multigpu_torchrun.py 50 10
+    To run the script, use the following command on each node:
 
+    Node 0:
+    torchrun --nproc_per_node=4 \
+             --nnodes=2 \
+             --node_rank=0 \
+             --rdzv_id=12355 \
+             --rdzv_backend=c10d \
+             --rdzv_endpoint=123.45.67.89:12355 \
+             multinode.py 50 10
+
+    Node 1: 
+    torchrun --nproc_per_node=4 \
+             --nnodes=2 \
+             --node_rank=1 \
+             --rdzv_id=12355 \
+             --rdzv_backend=c10d \
+             --rdzv_endpoint=123.45.67.89:12355 \
+             multinode.py 50 10
+
+    The arguments 50 and 10 represent total_epochs and save_every respectively.
+    Recommended to use machines with high network bandwidth.
+
+    For more information, refer to the PyTorch documentation:
+    https://pytorch.org/tutorials/intermediate/ddp_series_multinode.html
     """
     import argparse
 
