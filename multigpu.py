@@ -51,7 +51,9 @@ class Trainer:
         print(
             f"[GPU{self.gpu_id}] Epoch {epoch} | Batchsize: {b_sz} | Steps: {len(self.train_data)}"
         )
-        self.train_data.sampler.set_epoch(epoch)
+        # Ensure the sampler is a DistributedSampler
+        if isinstance(self.train_data.sampler, DistributedSampler):
+            self.train_data.sampler.set_epoch(epoch)
         for source, targets in self.train_data:
             source = source.to(self.gpu_id)
             targets = targets.to(self.gpu_id)
