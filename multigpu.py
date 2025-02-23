@@ -51,7 +51,8 @@ class Trainer:
         print(
             f"[GPU{self.gpu_id}] Epoch {epoch} | Batchsize: {b_sz} | Steps: {len(self.train_data)}"
         )
-        # Ensure the sampler is a DistributedSampler
+        # Necessary for shuffling the data across GPUs per epoch
+        # Recall we disabled shuffling in the DataLoader
         if isinstance(self.train_data.sampler, DistributedSampler):
             self.train_data.sampler.set_epoch(epoch)
         for source, targets in self.train_data:
@@ -110,9 +111,17 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="simple distributed training job")
     parser.add_argument(
-        "total_epochs", type=int, help="Total epochs to train the model"
+        "--total_epochs",
+        type=int,
+        default=20,
+        help="Total epochs to train the model (default: 20)",
     )
-    parser.add_argument("save_every", type=int, help="How often to save a snapshot")
+    parser.add_argument(
+        "--save_every",
+        type=int,
+        default=10,
+        help="How often to save a snapshot (default: 10)",
+    )
     parser.add_argument(
         "--batch_size",
         default=32,
